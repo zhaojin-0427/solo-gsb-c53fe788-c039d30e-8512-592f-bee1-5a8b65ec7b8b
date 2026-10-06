@@ -30,7 +30,7 @@ const S = {
   // 响应归属裁决
   mechVersion: 0,      // 机构版本：任何修改自增，此前发出的请求全部失效
   opSeq: 0,            // 操作序号：同一机构内以最新发起的分析/选支为准
-  choosing: false,     // 选支请求在途标记：未完成前禁止重复提交
+  choosing: false,     // 在途选支的占用令牌（=其操作序号，false 表示空闲）：未完成前禁止重复提交
   // 播放
   playing: false,
   playSeg: 0,
@@ -94,6 +94,7 @@ function markDirty() {
   S.paused = null;
   S.messages = [];
   S.analysisStatus = null;
+  S.choosing = false;  // 旧选支随会话一并作废：释放按钮占用，其迟到收尾不得再触碰界面
   S.playing = false;
   S.playTheta = null;
   $('btnPlay').disabled = true;
@@ -436,7 +437,7 @@ function renderResults() {
       const b = document.createElement('button');
       b.className = 'cand-btn';
       b.textContent = `选择候选 ${i + 1}（θ=${c.theta.toFixed(2)}°）`;
-      b.disabled = S.choosing;
+      b.disabled = !!S.choosing;
       b.onclick = () => chooseCandidate(i);
       ce.appendChild(b);
     });
@@ -468,6 +469,7 @@ async function analyze() {
   const ver = S.mechVersion, op = ++S.opSeq;
   // 仅当机构未变更且没有更新的操作时，本响应才有权写界面
   const valid = () => ver === S.mechVersion && op === S.opSeq;
+  S.choosing = false;  // 新分析取代一切在途选支：释放旧按钮占用
   setStatus('分析中…');
   let data;
   try {
@@ -507,10 +509,10 @@ function applyResult(data) {
 }
 
 async function chooseCandidate(i) {
-  if (S.sessionId == null || S.choosing) return;  // 选支未完成前禁止重复提交
+  if (S.sessionId == null || S.choosing) return;  // 当前有效选支未完成前禁止重复提交
   const ver = S.mechVersion, op = ++S.opSeq;
   const valid = () => ver === S.mechVersion && op === S.opSeq;
-  S.choosing = true;
+  S.choosing = op;   // 以操作序号作为占用令牌：被取代后不得再释放新占用
   renderResults();   // 在途期间禁用候选按钮
   let data;
   try {
@@ -528,8 +530,12 @@ async function chooseCandidate(i) {
     if (valid()) setStatus('网络错误：' + err.message, true);
     return;
   } finally {
-    S.choosing = false;
-    renderResults();
+    // 仅当占用仍属于本请求时才释放并重绘；被取代的选支迟到的收尾
+    // 不得解除新选支的占用，也不得触发多余的重绘
+    if (S.choosing === op) {
+      S.choosing = false;
+      renderResults();
+    }
   }
   if (!valid()) return;   // 过期响应：不得覆盖当前界面
   applyResult(data);
